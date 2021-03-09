@@ -159,7 +159,7 @@ resource "aws_instance" "ec2_instance" {
   subnet_id = "${aws_subnet.subnet_1.id}"
   security_groups   = ["${aws_security_group.application.id}"]
   iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
-  key_name = "csye6225_spring2021"
+  key_name =  var.key_name
     root_block_device {
     volume_type = "gp2"
     volume_size = 20
