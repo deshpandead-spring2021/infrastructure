@@ -532,3 +532,22 @@ resource "aws_codedeploy_deployment_group" "example" {
     }
   }
 }
+
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_policy_attach" {
+   role       = aws_iam_role.ec2role.name
+   policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+  
+}
+
+
+resource "aws_route53_record" "record" {
+  zone_id = var.zoneId
+  name    = var.record_name
+  type    = "A"
+  ttl     = "60"
+  records = [aws_instance.ec2_instance.public_ip]
+}
+data "aws_route53_zone" "primary" {
+  name         = var.record_name
+}
