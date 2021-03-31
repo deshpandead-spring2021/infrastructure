@@ -150,37 +150,91 @@ resource "aws_security_group" "application" {
   }
 }
 
-resource "aws_instance" "ec2_instance" {
-  ami               = var.ami
-  instance_type     = "t2.micro"
-  availability_zone = "us-east-1a"
-  disable_api_termination = false
-  instance_initiated_shutdown_behavior = var.terminate
-  subnet_id = "${aws_subnet.subnet_1.id}"
-  security_groups   = ["${aws_security_group.application.id}"]
-  iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
-  key_name =  var.key_name
-    root_block_device {
-    volume_type = "gp2"
-    volume_size = 20
-    delete_on_termination = true
-  }
-  tags = {
-        Name = "ec2_instance- ${terraform.workspace}"
-  }
+# resource "aws_instance" "ec2_instance" {
+#   ami               = var.ami
+#   instance_type     = "t2.micro"
+#   availability_zone = "us-east-1a"
+#   disable_api_termination = false
+#   instance_initiated_shutdown_behavior = var.terminate
+#   subnet_id = "${aws_subnet.subnet_1.id}"
+#   security_groups   = ["${aws_security_group.application.id}"]
+#   iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
+#   key_name =  var.key_name
+#     root_block_device {
+#     volume_type = "gp2"
+#     volume_size = 20
+#     delete_on_termination = true
+#   }
+#   tags = {
+#         Name = "ec2_instance- ${terraform.workspace}"
+#   }
 
-  user_data = <<-EOF
-#! /bin/bash
-sudo echo export "S3_BUCKET_NAME=${aws_s3_bucket.bucket.bucket}" >> /etc/environment
-sudo echo export "DB_ENDPOINT=${element(split(":", aws_db_instance.RDS-Instance.endpoint), 0)}" >> /etc/environment
-sudo echo export "DB_NAME=${aws_db_instance.RDS-Instance.name}" >> /etc/environment
-sudo echo export "DB_USERNAME=${aws_db_instance.RDS-Instance.username}" >> /etc/environment
-sudo echo export "DB_PASSWORD=${aws_db_instance.RDS-Instance.password}" >> /etc/environment
-sudo echo export "AWS_REGION=${var.region}" >> /etc/environment
-sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
-EOF
+#   user_data = <<-EOF
+# #! /bin/bash
+# sudo echo export "S3_BUCKET_NAME=${aws_s3_bucket.bucket.bucket}" >> /etc/environment
+# sudo echo export "DB_ENDPOINT=${element(split(":", aws_db_instance.RDS-Instance.endpoint), 0)}" >> /etc/environment
+# sudo echo export "DB_NAME=${aws_db_instance.RDS-Instance.name}" >> /etc/environment
+# sudo echo export "DB_USERNAME=${aws_db_instance.RDS-Instance.username}" >> /etc/environment
+# sudo echo export "DB_PASSWORD=${aws_db_instance.RDS-Instance.password}" >> /etc/environment
+# sudo echo export "AWS_REGION=${var.region}" >> /etc/environment
+# sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
+# EOF
+
+# }
+
+
+
+resource "aws_launch_configuration" "asg-config" {
+  name = "asg_launch_config"
+  image_id=var.ami
+  instance_type="t2.micro"
+  key_name=var.key_name
+  associate_public_ip_address = true
+  ebs_block_device {
+        device_name = "/dev/sdg"
+        volume_size = 20
+        volume_type = "gp2"
+        delete_on_termination = true
+    }
+ user_data = <<-EOF
+ #! /bin/bash
+ sudo echo export "S3_BUCKET_NAME=${aws_s3_bucket.bucket.bucket}" >> /etc/environment
+ sudo echo export "DB_ENDPOINT=${element(split(":", aws_db_instance.RDS-Instance.endpoint), 0)}" >> /etc/environment
+ sudo echo export "DB_NAME=${aws_db_instance.RDS-Instance.name}" >> /etc/environment
+ sudo echo export "DB_USERNAME=${aws_db_instance.RDS-Instance.username}" >> /etc/environment
+ sudo echo export "DB_PASSWORD=${aws_db_instance.RDS-Instance.password}" >> /etc/environment
+ sudo echo export "AWS_REGION=${var.region}" >> /etc/environment
+ sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
+ EOF
+
+  iam_instance_profile = "${aws_iam_instance_profile.profile.name}"
+  security_groups= ["${aws_security_group.Application_SG.id}"]
+  depends_on = [aws_db_instance.RDS-Instance]
 
 }
+
+// AutoScaling Group
+resource "aws_autoscaling_group" "web_server_group" {
+  name                      = "WebServerGroup"
+  max_size                  = 5
+  min_size                  = 3
+  default_cooldown          = 60
+  desired_capacity          = 3
+  launch_configuration      = "${aws_launch_configuration.asg-config.name}"
+  vpc_zone_identifier       = ["${aws_subnet.subnet_1.id}", "${aws_subnet.subnet_2.id}", "${aws_subnet.subnet_3.id}"]
+  target_group_arns = ["${aws_lb_target_group.lb_tg_webapp.arn}"]
+  tags = [
+    {
+      key                 = "Name"
+      value               = "webapp"
+      propagate_at_launch = true
+    }
+  ]
+}
+
+
+
+
 
 
 resource "aws_db_subnet_group" "db_subnet_group" {
