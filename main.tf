@@ -226,13 +226,14 @@ resource "aws_autoscaling_group" "web_server_group" {
   vpc_zone_identifier       = ["${aws_subnet.subnet_1.id}", "${aws_subnet.subnet_2.id}", "${aws_subnet.subnet_3.id}"]
   health_check_grace_period = 1200
   target_group_arns = ["${aws_lb_target_group.lb_tg_webapp.arn}"]
-tag {
- key = "Name"
- value = "ec2_instance"
- propagate_at_launch = true
- }
+  tags = [
+    {
+      key                 = "Name"
+      value               = "webapp"
+      propagate_at_launch = true
+    }
+  ]
 }
-
 
 // ASG Scaleup policy
 resource "aws_autoscaling_policy" "web_server_scaleup_policy" {
