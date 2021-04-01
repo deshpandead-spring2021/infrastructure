@@ -16,7 +16,7 @@ enable_classiclink_dns_support = true
 enable_dns_hostnames = var.dnsHostNames
 assign_generated_ipv6_cidr_block = false
   tags= {
-    Name = "My_VPC - ${terraform.workspace}"
+    Name = "My_VPC"
 }
 
 } 
@@ -28,7 +28,7 @@ resource "aws_internet_gateway" "ig-way" {
     vpc_id = "${aws_vpc.My_VPC.id}"
 
     tags= {
-        Name = "ig_way - ${terraform.workspace}"
+        Name = "ig_way"
     }
 }
 
@@ -42,7 +42,7 @@ resource "aws_subnet" "subnet_1" {
     availability_zone = var.subnet1_zone
 
     tags ={
-        Name = "subnet_1- ${terraform.workspace}"
+        Name = "subnet_1"
     }
 }
 
@@ -53,7 +53,7 @@ resource "aws_subnet" "subnet_2" {
     availability_zone = var.subnet2_zone
 
     tags= {
-        Name = "subnet_2- ${terraform.workspace}"
+        Name = "subnet_2"
     }
 }
 
@@ -64,7 +64,7 @@ resource "aws_subnet" "subnet_3" {
     availability_zone = var.subnet3_zone
 
     tags= {
-        Name = "subnet_3- ${terraform.workspace}"
+        Name = "subnet_3"
     }
 }
 
@@ -77,7 +77,7 @@ resource "aws_route_table" "route-table" {
     }
 
     tags= {
-        Name = "route-table- ${terraform.workspace}"
+        Name = "route-table"
     }
 }
 
@@ -104,7 +104,7 @@ resource "aws_route_table_association" "subnet_3-a" {
 
 resource "aws_security_group" "application" {
   name        = "application"
-  description = "Allow TLS inbound traffic allow ports 22,80,443,8080"
+  description = "Allow TLS inbound traffic allow ports 8080"
   vpc_id = "${aws_vpc.My_VPC.id}"
 
 
@@ -137,6 +137,7 @@ resource "aws_security_group" "application" {
     to_port     = 8080
     protocol    = "tcp"
     cidr_blocks =  ["0.0.0.0/0"]
+    
   }
     # Allow all outbound traffic.
    egress {
@@ -146,7 +147,7 @@ resource "aws_security_group" "application" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = {
-    Name = "application- ${terraform.workspace}"
+    Name = "application"
   }
 }
 
@@ -183,12 +184,11 @@ resource "aws_security_group" "application" {
 # }
 
 
-
 resource "aws_launch_configuration" "asg-config" {
   name = "asg_launch_config"
   image_id=var.ami
   instance_type="t2.micro"
-  key_name=var.key_name
+  key_name="csye_spring_2021"
   associate_public_ip_address = true
   ebs_block_device {
         device_name = "/dev/sdg"
@@ -205,10 +205,12 @@ resource "aws_launch_configuration" "asg-config" {
  sudo echo export "DB_PASSWORD=${aws_db_instance.RDS-Instance.password}" >> /etc/environment
  sudo echo export "AWS_REGION=${var.region}" >> /etc/environment
  sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
+ 
+
  EOF
 
-  iam_instance_profile = "${aws_iam_instance_profile.profile.name}"
-  security_groups= ["${aws_security_group.Application_SG.id}"]
+  iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
+  security_groups= ["${aws_security_group.application.id}"]
   depends_on = [aws_db_instance.RDS-Instance]
 
 }
@@ -222,18 +224,132 @@ resource "aws_autoscaling_group" "web_server_group" {
   desired_capacity          = 3
   launch_configuration      = "${aws_launch_configuration.asg-config.name}"
   vpc_zone_identifier       = ["${aws_subnet.subnet_1.id}", "${aws_subnet.subnet_2.id}", "${aws_subnet.subnet_3.id}"]
+  health_check_grace_period = 1200
   target_group_arns = ["${aws_lb_target_group.lb_tg_webapp.arn}"]
-  tags = [
-    {
-      key                 = "Name"
-      value               = "webapp"
-      propagate_at_launch = true
-    }
-  ]
+tag {
+ key = "Name"
+ value = "ec2_instance"
+ propagate_at_launch = true
+ }
 }
 
 
+// ASG Scaleup policy
+resource "aws_autoscaling_policy" "web_server_scaleup_policy" {
+  name                   = "WebServerScaleUpPolicy"
+  scaling_adjustment     = 1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 60
+  autoscaling_group_name = "${aws_autoscaling_group.web_server_group.name}"
+}
 
+// ASG Scaledown policy
+resource "aws_autoscaling_policy" "web_server_scaledown_policy" {
+  name                   = "WebServerScaleDownPolicy"
+  scaling_adjustment     = -1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 60
+  autoscaling_group_name = "${aws_autoscaling_group.web_server_group.name}"
+}
+// ASG CW Alarm for scaleup
+resource "aws_cloudwatch_metric_alarm" "cw_alarm_high" {
+  alarm_name                = "CPUAlarmHigh"
+  comparison_operator       = "GreaterThanThreshold"
+  evaluation_periods        = "1"
+  metric_name               = "CPUUtilization"
+  namespace                 = "AWS/EC2"
+  period                    = "300"
+  statistic                 = "Average"
+  threshold                 = "5"
+  dimensions = "${map("AutoScalingGroupName", "${aws_autoscaling_group.web_server_group.name}")}"
+  alarm_description         = "Scale-up if CPU > 5% for 5 minutes"
+  alarm_actions     = ["${aws_autoscaling_policy.web_server_scaleup_policy.arn}"]
+}
+
+
+// ASG CW Alarm for scaledown
+resource "aws_cloudwatch_metric_alarm" "cw_alarm_low" {
+  alarm_name                = "CPUAlarmLow"
+  comparison_operator       = "LessThanThreshold"
+  evaluation_periods        = "1"
+  metric_name               = "CPUUtilization"
+  namespace                 = "AWS/EC2"
+  period                    = "300"
+  statistic                 = "Average"
+  threshold                 = "3"
+  alarm_description         = "Scale-down if CPU < 3% for 5 minutes"
+  dimensions = "${map("AutoScalingGroupName", "${aws_autoscaling_group.web_server_group.name}")}"
+  alarm_actions     = ["${aws_autoscaling_policy.web_server_scaledown_policy.arn}"]
+}
+// Application Load Balancer
+resource "aws_lb" "app_lb" {
+  name = "appLoadBalancer"
+  subnets = ["${aws_subnet.subnet_1.id}", "${aws_subnet.subnet_2.id}", "${aws_subnet.subnet_3.id}"]
+  security_groups = ["${aws_security_group.sg_loadbalancer.id}"]
+  load_balancer_type = "application"
+  ip_address_type = "ipv4"
+  enable_deletion_protection = false
+  tags = {
+      Name = "ec2_instance"
+    }
+}
+resource "aws_lb_target_group" "lb_tg_webapp" {
+  name     = "WebAppTargetGroup"
+  health_check {
+    port = "8080"
+    interval = 10
+    timeout = 5
+    healthy_threshold = 2
+    unhealthy_threshold = 2
+    path = "/"
+  }  
+  deregistration_delay = 20
+  port     = 8080
+  protocol = "HTTP"
+  vpc_id   = "${aws_vpc.My_VPC.id}"
+}
+
+resource "aws_lb_listener" "alb_listener1" {
+  load_balancer_arn = "${aws_lb.app_lb.arn}"
+  port              = "80"
+  protocol          = "HTTP"
+  
+  default_action {
+    type             = "forward"
+    target_group_arn = "${aws_lb_target_group.lb_tg_webapp.arn}"
+  }
+}
+
+
+resource "aws_security_group" "sg_loadbalancer" {
+    name="LoadBalancer-Security-Group"
+    description="Enable HTTPS via port 8080"
+    vpc_id="${aws_vpc.My_VPC.id}"
+
+    ingress {
+        to_port = 80
+        from_port = 80
+        protocol = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    ingress {
+        to_port = 443
+        from_port = 443
+        protocol = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    egress {
+        to_port = 8080
+        from_port =8080
+        protocol = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+    tags = {
+        Name = "sg_loadbalancer"
+    }
+}
 
 
 
@@ -242,8 +358,8 @@ resource "aws_db_subnet_group" "db_subnet_group" {
   
   subnet_ids = [aws_subnet.subnet_2.id,aws_subnet.subnet_3.id]
   
-  tags = {
-    Name = "subnet-group-db -${terraform.workspace}"
+  tags= {
+    Name = "subnet-group-db"
   }
 
 }
@@ -262,6 +378,29 @@ resource "aws_security_group" "database" {
     protocol    = "tcp"
     cidr_blocks = [var.cidr_block_subnet_1]
   }
+
+    ingress {
+    description = "TLS from VPC"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "TLS from VPC"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    description = "TLS from VPC"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
     # Allow all outbound traffic.
    egress {
     from_port   = 0
@@ -270,8 +409,8 @@ resource "aws_security_group" "database" {
     cidr_blocks = [var.cidr_block_subnet_1]
   }
   
-  tags = {
-    Name = "database- ${terraform.workspace}"
+  tags= {
+    Name = "database"
   }
 }
 
@@ -296,8 +435,8 @@ resource "aws_db_instance" "RDS-Instance" {
   db_subnet_group_name = aws_db_subnet_group.db_subnet_group.name
   
 
-  tags ={
-    Name="RDS database- ${terraform.workspace}"
+  tags={
+    Name="RDS-database"
   }
 }
 
@@ -565,26 +704,28 @@ resource "aws_codedeploy_app" "codedeploy_app" {
 
 
 #  CodeDeploy Deployment Group
-resource "aws_codedeploy_deployment_group" "example" {
-  app_name              = aws_codedeploy_app.codedeploy_app.name
-  deployment_group_name = var.codedeploy_group
-  service_role_arn      = aws_iam_role.CodeDeployServiceRole.arn
-  deployment_config_name = "CodeDeployDefault.AllAtOnce"
+resource "aws_codedeploy_deployment_group" "csye6225-webapp-deployment" {
+app_name = aws_codedeploy_app.codedeploy_app.name
+deployment_group_name = "csye6225-webapp-deployment"
+service_role_arn = aws_iam_role.CodeDeployServiceRole.arn
+deployment_config_name = "CodeDeployDefault.OneAtATime"
+autoscaling_groups = [aws_autoscaling_group.web_server_group.name]
+load_balancer_info {
+target_group_info {
+name = aws_lb_target_group.lb_tg_webapp.name
+}
+}
   deployment_style {
-    deployment_option = "WITHOUT_TRAFFIC_CONTROL"
+    deployment_option = "WITH_TRAFFIC_CONTROL"
     deployment_type   = "IN_PLACE"
   }
-  auto_rollback_configuration {
-    enabled = true
-    events  = ["DEPLOYMENT_FAILURE"]
-  }
-  ec2_tag_set {
-    ec2_tag_filter {
-      key   = "Name"
-      type  = "KEY_AND_VALUE"
-      value = "ec2_instance- ${terraform.workspace}"
-    }
-  }
+ ec2_tag_set {
+ec2_tag_filter {
+key = "Name"
+type = "KEY_AND_VALUE"
+value = "ec2_instance"
+}
+}
 }
 
 
@@ -595,13 +736,28 @@ resource "aws_iam_role_policy_attachment" "cloudwatch_policy_attach" {
 }
 
 
-resource "aws_route53_record" "record" {
+# resource "aws_route53_record" "record" {
+#   zone_id = var.zoneId
+#   name    = var.record_name
+#   type    = "A"
+#   ttl     = "60"
+#   records = [aws_instance.ec2_instance.public_ip]
+# }
+data "aws_route53_zone" "primary" {
+  name         = var.record_name
+}
+
+// DNS Record
+resource "aws_route53_record" "dns_record" {
   zone_id = var.zoneId
   name    = var.record_name
   type    = "A"
-  ttl     = "60"
-  records = [aws_instance.ec2_instance.public_ip]
+  alias {
+    name                   = "${aws_lb.app_lb.dns_name}"
+    zone_id                = "${aws_lb.app_lb.zone_id}"
+    evaluate_target_health = false
+  }
 }
-data "aws_route53_zone" "primary" {
-  name         = var.record_name
+output "appLoadBalancer" {
+  value = "${aws_lb.app_lb.arn}"
 }
