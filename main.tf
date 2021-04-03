@@ -107,45 +107,29 @@ resource "aws_security_group" "application" {
   description = "Allow TLS inbound traffic allow ports 8080"
   vpc_id = "${aws_vpc.My_VPC.id}"
 
-
   ingress {
-  
-    description = "TLS from VPC"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-    ingress {
-    description = "TLS from VPC"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks =  ["0.0.0.0/0"]
-  }
-    ingress {
-    description = "TLS from VPC"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks =  ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "TLS from VPC"
+    description = "Allow Load Balancer Access"
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks =  ["0.0.0.0/0"]
-    
+    security_groups = [aws_security_group.sg_loadbalancer.id]
   }
-    # Allow all outbound traffic.
-   egress {
+
+    ingress {
+    description = "Allow Load Balancer Access"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+  }
+
+
+  egress {
     from_port   = 0
-    to_port     = 0 
+    to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
   tags = {
     Name = "application"
   }
@@ -211,8 +195,7 @@ resource "aws_launch_configuration" "asg-config" {
 
   iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
   security_groups= ["${aws_security_group.application.id}"]
-  depends_on = [aws_db_instance.RDS-Instance]
-
+ 
 }
 
 // AutoScaling Group
@@ -226,7 +209,7 @@ resource "aws_autoscaling_group" "web_server_group" {
   vpc_zone_identifier       = ["${aws_subnet.subnet_1.id}", "${aws_subnet.subnet_2.id}", "${aws_subnet.subnet_3.id}"]
   health_check_grace_period = 1200
   target_group_arns = ["${aws_lb_target_group.lb_tg_webapp.arn}"]
-  tags = [
+  tags =[
     {
       key                 = "Name"
       value               = "webapp"
@@ -261,9 +244,9 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm_high" {
   namespace                 = "AWS/EC2"
   period                    = "300"
   statistic                 = "Average"
-  threshold                 = "5"
+  threshold                 = "50"
   dimensions = "${map("AutoScalingGroupName", "${aws_autoscaling_group.web_server_group.name}")}"
-  alarm_description         = "Scale-up if CPU > 5% for 5 minutes"
+  alarm_description         = "Scale-up if CPU > 50% for 5 minutes"
   alarm_actions     = ["${aws_autoscaling_policy.web_server_scaleup_policy.arn}"]
 }
 
@@ -282,9 +265,12 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm_low" {
   dimensions = "${map("AutoScalingGroupName", "${aws_autoscaling_group.web_server_group.name}")}"
   alarm_actions     = ["${aws_autoscaling_policy.web_server_scaledown_policy.arn}"]
 }
+
+
 // Application Load Balancer
 resource "aws_lb" "app_lb" {
   name = "appLoadBalancer"
+  internal = false
   subnets = ["${aws_subnet.subnet_1.id}", "${aws_subnet.subnet_2.id}", "${aws_subnet.subnet_3.id}"]
   security_groups = ["${aws_security_group.sg_loadbalancer.id}"]
   load_balancer_type = "application"
@@ -296,6 +282,7 @@ resource "aws_lb" "app_lb" {
 }
 resource "aws_lb_target_group" "lb_tg_webapp" {
   name     = "WebAppTargetGroup"
+  target_type = "instance"
   health_check {
     port = "8080"
     interval = 10
@@ -326,27 +313,31 @@ resource "aws_security_group" "sg_loadbalancer" {
     name="LoadBalancer-Security-Group"
     description="Enable HTTPS via port 8080"
     vpc_id="${aws_vpc.My_VPC.id}"
+    
 
-    ingress {
-        to_port = 80
-        from_port = 80
-        protocol = "tcp"
-        cidr_blocks = ["0.0.0.0/0"]
-    }
+  ingress {
+    description = "Port 80"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.cidr_block_map["cidr_route"]]
+  }
 
-    ingress {
-        to_port = 443
-        from_port = 443
-        protocol = "tcp"
-        cidr_blocks = ["0.0.0.0/0"]
-    }
+  ingress {
+    description = "Port 443"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.cidr_block_map["cidr_route"]]
+  }
 
-    egress {
-        to_port = 8080
-        from_port =8080
-        protocol = "tcp"
-        cidr_blocks = ["0.0.0.0/0"]
-    }
+  egress {
+    description = "Port 8080"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = [var.cidr_block_map["cidr_route"]]
+  }
     tags = {
         Name = "sg_loadbalancer"
     }
@@ -357,7 +348,7 @@ resource "aws_security_group" "sg_loadbalancer" {
 resource "aws_db_subnet_group" "db_subnet_group" {
   name       = var.db_subnet_group
   
-  subnet_ids = [aws_subnet.subnet_2.id,aws_subnet.subnet_3.id]
+  subnet_ids = [aws_subnet.subnet_1.id,aws_subnet.subnet_2.id,aws_subnet.subnet_3.id]
   
   tags= {
     Name = "subnet-group-db"
@@ -373,43 +364,12 @@ resource "aws_security_group" "database" {
   vpc_id      = aws_vpc.My_VPC.id
 
   ingress {
-    description = "TLS from VPC"
+    description = "Allow MySQL access"
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
-    cidr_blocks = [var.cidr_block_subnet_1]
-  }
-
-    ingress {
-    description = "TLS from VPC"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "TLS from VPC"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  ingress {
-    description = "TLS from VPC"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-    # Allow all outbound traffic.
-   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = [var.cidr_block_subnet_1]
-  }
-  
+    security_groups = [aws_security_group.application.id]
+}
   tags= {
     Name = "database"
   }
@@ -433,7 +393,7 @@ resource "aws_db_instance" "RDS-Instance" {
   multi_az                = "false"
   skip_final_snapshot = true
   vpc_security_group_ids = [aws_security_group.database.id]
-  db_subnet_group_name = aws_db_subnet_group.db_subnet_group.name
+  db_subnet_group_name = aws_db_subnet_group.db_subnet_group.id
   
 
   tags={
@@ -720,13 +680,14 @@ name = aws_lb_target_group.lb_tg_webapp.name
     deployment_option = "WITH_TRAFFIC_CONTROL"
     deployment_type   = "IN_PLACE"
   }
- ec2_tag_set {
-ec2_tag_filter {
-key = "Name"
-type = "KEY_AND_VALUE"
-value = "ec2_instance"
-}
-}
+#  ec2_tag_set {
+# ec2_tag_filter {
+# key = "Name"
+# type = "KEY_AND_VALUE"
+# value = "ec2_instance"
+# }
+# }
+
 }
 
 
@@ -744,6 +705,7 @@ resource "aws_iam_role_policy_attachment" "cloudwatch_policy_attach" {
 #   ttl     = "60"
 #   records = [aws_instance.ec2_instance.public_ip]
 # }
+
 data "aws_route53_zone" "primary" {
   name         = var.record_name
 }
@@ -756,8 +718,8 @@ resource "aws_route53_record" "dns_record" {
   alias {
     name                   = "${aws_lb.app_lb.dns_name}"
     zone_id                = "${aws_lb.app_lb.zone_id}"
-    evaluate_target_health = false
-  }
+    evaluate_target_health = true  
+    }
 }
 output "appLoadBalancer" {
   value = "${aws_lb.app_lb.arn}"
