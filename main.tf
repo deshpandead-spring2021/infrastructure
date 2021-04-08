@@ -120,6 +120,7 @@ resource "aws_security_group" "application" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
 
@@ -189,8 +190,9 @@ resource "aws_launch_configuration" "asg-config" {
  sudo echo export "DB_PASSWORD=${aws_db_instance.RDS-Instance.password}" >> /etc/environment
  sudo echo export "AWS_REGION=${var.region}" >> /etc/environment
  sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
+ sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
+ sudo echo export "SNS_TOPIC=${aws_sns_topic.sns_topic.arn}" >> /etc/environment
  
-
  EOF
 
   iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
@@ -507,6 +509,49 @@ policy = <<EOF
 EOF
 }
 
+
+
+# This policy is required for lambda  to download latest application revision.
+resource "aws_iam_policy" "CodeDeploy_Lambda_S3" {
+  name        = "CodeDeploy_Lamda_S3"
+  description = "Policy for lamda instance to store and retrieve  artifacts in S3"
+policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:Get*",
+        "s3:List*"
+      ],
+      "Resource": [ "${var.codedeploy_lambda_bucket_arn}" , "${var.codedeploy_lambda_bucket_arn_star}" ]
+    }
+  ]
+}
+EOF
+}
+
+
+resource "aws_iam_user_policy_attachment" "attach_ghactions_Lamda_S3" {
+  user       = var.ghactions_username
+  policy_arn = aws_iam_policy.GH_Upload_To_S3.arn
+}
+
+resource "aws_iam_role_policy_attachment" "attach_Lamda_S3" {
+  policy_arn = aws_iam_policy.CodeDeploy_Lambda_S3.arn
+    role = aws_iam_role.iam_for_lambda.name
+}
+
+resource "aws_iam_role_policy_attachment" "attach_Codedeploy_Lamda_S3" {
+
+  policy_arn = aws_iam_policy.CodeDeploy_Lambda_S3.arn
+    role      = aws_iam_role.CodeDeployServiceRole.name
+}
+
+
+
+
 # Policy allows GitHub Actions to upload artifacts from latest successful build to dedicated S3 bucket used by CodeDeploy.
 resource "aws_iam_policy" "GH_Upload_To_S3" {
   name        = "${var.GH-Upload-To-S3}"
@@ -575,6 +620,52 @@ EOF
 }
 
 
+
+# policy allows GitHub Actions to call CodeDeploy APIs to initiate application deployment on EC2 instances.
+resource "aws_iam_policy" "GH_Code_Deploy_Lambda" {
+  name        = "Lamda_Codedeploy"
+  description = "Policy allows GitHub Actions to call CodeDeploy APIs to initiate application deployment on EC2 instances."
+policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codedeploy:RegisterApplicationRevision",
+        "codedeploy:GetApplicationRevision"
+      ],
+      "Resource": [
+        "arn:aws:codedeploy:${var.aws_region}:${var.account_id}:application:${var.codedeploy_lambda}"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codedeploy:CreateDeployment",
+        "codedeploy:GetDeployment"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codedeploy:GetDeploymentConfig"
+      ],
+      "Resource": [
+        "arn:aws:codedeploy:${var.aws_region}:${var.account_id}:deploymentconfig:CodeDeployDefault.OneAtATime",
+        "arn:aws:codedeploy:${var.aws_region}:${var.account_id}:deploymentconfig:CodeDeployDefault.HalfAtATime",
+        "arn:aws:codedeploy:${var.aws_region}:${var.account_id}:deploymentconfig:CodeDeployDefault.AllAtOnce"
+      ]
+    }
+  ]
+}
+EOF
+}
+
+
 # create Role for Code Deploy
 resource "aws_iam_role" "CodeDeployEC2ServiceRole" {
   name = var.CodeDeployEC2ServiceRole
@@ -611,6 +702,10 @@ resource "aws_iam_user_policy_attachment" "attach_GH_Code_Deploy" {
   policy_arn = aws_iam_policy.GH_Code_Deploy.arn
 }
 
+resource "aws_iam_user_policy_attachment" "attach_GH_Code_Deploy_Lamda" {
+  user       = var.ghactions_username
+  policy_arn = aws_iam_policy.GH_Code_Deploy_Lambda.arn
+}
 
 #create CodeDeployServiceRole role
 resource "aws_iam_role" "CodeDeployServiceRole" {
@@ -646,8 +741,15 @@ resource "aws_iam_role_policy_attachment" "CodeDeployEC2ServiceRole_webapps3_pol
 resource "aws_iam_role_policy_attachment" "CodeDeployServiceRole_policy_attacher" {
   role       = aws_iam_role.CodeDeployServiceRole.name
   policy_arn = var.CodeDeployServiceRole_policy
+
 }
 
+
+resource "aws_iam_role_policy_attachment" "CodeDeployServiceRole_policy_attacher_lambda" {
+  role       = aws_iam_role.CodeDeployServiceRole.name
+  policy_arn = var.CodeDeployServiceRole_lambda_policy
+
+}
 
 
 
@@ -661,6 +763,12 @@ resource "aws_iam_role_policy_attachment" "CodeDeployEC2ServiceRole_policy_attac
 resource "aws_codedeploy_app" "codedeploy_app" {
   compute_platform = "Server"
   name             = var.codedeploy_appname
+}
+
+# Code Deploy Applicaiton 
+resource "aws_codedeploy_app" "codedeploy_lambda_appname" {
+  compute_platform = "Lambda"
+  name             = var.codedeploy_lambda
 }
 
 
@@ -687,6 +795,20 @@ name = aws_lb_target_group.lb_tg_webapp.name
 # value = "ec2_instance"
 # }
 # }
+
+}
+
+
+#  CodeDeploy Deployment Group for Lambda
+resource "aws_codedeploy_deployment_group" "csye6225-lambda-deployment" {
+app_name = aws_codedeploy_app.codedeploy_lambda_appname.name
+deployment_group_name = "csye6225-lambda-deployment"
+service_role_arn = aws_iam_role.CodeDeployServiceRole.arn
+deployment_config_name = "CodeDeployDefault.LambdaAllAtOnce"
+  deployment_style {
+    deployment_option = "WITH_TRAFFIC_CONTROL"
+    deployment_type   = "BLUE_GREEN"
+  }
 
 }
 
@@ -723,4 +845,190 @@ resource "aws_route53_record" "dns_record" {
 }
 output "appLoadBalancer" {
   value = "${aws_lb.app_lb.arn}"
+}
+
+
+resource "aws_dynamodb_table" "dynamodb" {
+  name           = "csye6225"
+  billing_mode   = "PROVISIONED"
+  read_capacity  = 5
+  write_capacity = 5
+  hash_key       = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  tags = {
+    Name = "dynamodb"
+  }
+}
+
+resource "aws_sns_topic" "sns_topic" {
+  name = "sns_topic"
+}
+
+resource "aws_iam_role" "iam_for_lambda" {
+  name = "iam_for_lambda"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_iam_attachment" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  role       = aws_iam_role.iam_for_lambda.name
+}
+
+
+resource "aws_lambda_function" "lambda" {
+  filename      = "csye6225-lambda.zip"
+  function_name = "csye6225"
+  role          = aws_iam_role.iam_for_lambda.arn
+  handler       = "index.handler"
+  memory_size   = 256
+  timeout       = 180
+  publish = true
+
+
+  runtime = "nodejs10.x"
+
+  environment {
+    variables = {
+      Name = "Lambda Function"
+    }
+  }
+}
+resource "aws_lambda_alias" "lambda_alias" {
+  name             = "lambdaalias"
+  function_version = aws_lambda_function.lambda.version
+  description      = "a sample description"
+  function_name    = "csye6225"
+  lifecycle {
+    ignore_changes = [function_version]
+}
+
+  # routing_config {
+  #   additional_version_weights = {
+  #     "2" = 0.5
+  #   }
+  # }
+}
+
+
+resource "aws_iam_role_policy_attachment" "SNSPolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSNSFullAccess"
+  role       = aws_iam_role.ec2role.name
+}
+
+
+# resource "aws_s3_bucket" "lamda-bucket" {
+#   bucket = var.lamda_bucket
+#   acl = "private"
+#   force_destroy = true
+#   lifecycle_rule {
+#     enabled = true
+#     transition {
+#       days = 30
+#       storage_class = "STANDARD_IA"
+#     }
+#   }
+#   server_side_encryption_configuration {
+#     rule {
+#       apply_server_side_encryption_by_default {
+#         sse_algorithm = var.encryption_algorithm
+#       }
+#     }
+#   }
+# }
+
+
+resource "aws_s3_bucket_public_access_block" "webappBucketRemovePublicAccess" {
+bucket = aws_s3_bucket.bucket.id
+block_public_acls = true
+block_public_policy = true
+restrict_public_buckets = true
+ignore_public_acls = true
+}
+
+# resource "aws_s3_bucket_public_access_block" "serverlessBucketRemovePublicAccess" {
+# bucket = aws_s3_bucket.lamda-bucket.id
+# block_public_acls = true
+# block_public_policy = true
+# restrict_public_buckets = true
+# ignore_public_acls = true
+# }
+
+data "aws_iam_user" "ghactions_user" {
+  user_name = "ghactions"
+}
+
+//adding lambda full access to gh actions user
+resource "aws_iam_user_policy_attachment" "ghactions_attach_gh_serverless_upload_to_s3_policy" {
+  user       = data.aws_iam_user.ghactions_user.user_name
+  policy_arn = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
+}
+
+resource "aws_sns_topic_subscription" "user_updates_sns_target" {
+  topic_arn = aws_sns_topic.sns_topic.arn
+  protocol  = "lambda"
+  endpoint  = "${aws_lambda_function.lambda.arn}"
+}
+
+resource "aws_lambda_permission" "lambda_sns_permission" {
+  statement_id  = "AllowExecutionFromSNS"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.lambda.function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.sns_topic.arn
+}
+
+resource "aws_iam_policy" "lambdapolicy" {
+  name        = "lambdapolicy"
+  path        = "/"
+  description = "lambdapolicy"
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ses:SendEmail",
+                "ses:SendRawEmail"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_execution_policy_attachment" {
+  policy_arn = aws_iam_policy.lambdapolicy.arn
+  role       = aws_iam_role.iam_for_lambda.name
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_ses_policy_attachment" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSESFullAccess"
+  role       = aws_iam_role.iam_for_lambda.name
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_dynamodb_policy_attachment" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+  role       = aws_iam_role.iam_for_lambda.name
 }
