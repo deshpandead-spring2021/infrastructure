@@ -169,19 +169,47 @@ resource "aws_security_group" "application" {
 # }
 
 
-resource "aws_launch_configuration" "asg-config" {
-  name = "asg_launch_config"
-  image_id=var.ami
-  instance_type="t2.micro"
-  key_name="csye_spring_2021"
-  associate_public_ip_address = true
-  ebs_block_device {
-        device_name = "/dev/sdg"
-        volume_size = 20
-        volume_type = "gp2"
-        delete_on_termination = true
-    }
- user_data = <<-EOF
+# resource "aws_launch_configuration" "asg-config" {
+#   name = "asg_launch_config"
+#   image_id=var.ami
+#   instance_type="t2.micro"
+#   key_name="csye_spring_2021"
+#   associate_public_ip_address = true
+#   # root_block_device {
+#   #   encrypted = true
+#   # }
+
+#   # ebs_block_device {
+#   #       device_name = "/dev/sdg"
+#   #       volume_size = 20
+#   #       volume_type = "gp2"
+#   #       delete_on_termination = true
+#   #       encrypted=true
+
+#   #   }
+#  user_data = <<-EOF
+#  #! /bin/bash
+#  sudo echo export "S3_BUCKET_NAME=${aws_s3_bucket.bucket.bucket}" >> /etc/environment
+#  sudo echo export "DB_ENDPOINT=${element(split(":", aws_db_instance.RDS-Instance.endpoint), 0)}" >> /etc/environment
+#  sudo echo export "DB_NAME=${aws_db_instance.RDS-Instance.name}" >> /etc/environment
+#  sudo echo export "DB_USERNAME=${aws_db_instance.RDS-Instance.username}" >> /etc/environment
+#  sudo echo export "DB_PASSWORD=${aws_db_instance.RDS-Instance.password}" >> /etc/environment
+#  sudo echo export "AWS_REGION=${var.region}" >> /etc/environment
+#  sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
+#  sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
+#  sudo echo export "SNS_TOPIC=${aws_sns_topic.sns_topic.arn}" >> /etc/environment
+ 
+#  EOF
+
+#   iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
+#   security_groups= ["${aws_security_group.application.id}"]
+ 
+# }
+
+
+
+data "template_file" "userData" {
+  template = <<-EOF
  #! /bin/bash
  sudo echo export "S3_BUCKET_NAME=${aws_s3_bucket.bucket.bucket}" >> /etc/environment
  sudo echo export "DB_ENDPOINT=${element(split(":", aws_db_instance.RDS-Instance.endpoint), 0)}" >> /etc/environment
@@ -192,22 +220,144 @@ resource "aws_launch_configuration" "asg-config" {
  sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
  sudo echo export "AWS_PROFILE=${var.profile}" >> /etc/environment
  sudo echo export "SNS_TOPIC=${aws_sns_topic.sns_topic.arn}" >> /etc/environment
- 
- EOF
-
-  iam_instance_profile = "${aws_iam_instance_profile.ec2_s3_profile.name}"
-  security_groups= ["${aws_security_group.application.id}"]
- 
+  
+  EOF
 }
+
+
+resource "aws_launch_template" "asg_launch_template" {
+  name          = "asg_launch_template"
+  image_id      = var.ami
+  instance_type = "t2.micro"
+  key_name      ="csye_spring_2021"
+    iam_instance_profile {
+    name = aws_iam_instance_profile.ec2_s3_profile.name
+  }
+  network_interfaces {
+    associate_public_ip_address = "true"
+  security_groups= ["${aws_security_group.application.id}"]
+  }
+  block_device_mappings {
+    device_name = "/dev/sda1"
+    ebs {
+      delete_on_termination = "true"
+      encrypted             = "true"
+      kms_key_id            = aws_kms_key.ebs_key.arn
+      volume_size           = 20
+      volume_type           = "gp2"
+    }
+  }
+  user_data = base64encode(data.template_file.userData.template)
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_kms_key" "ebs_key" {
+  description              = "This key encrypts ebs volume"
+  deletion_window_in_days  = 7
+  tags = {
+    Name = "ebs_key"
+  }
+  policy = jsonencode({
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Enable IAM User Permissions",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::528086553846:root"
+            },
+            "Action": "kms:*",
+            "Resource": "*"
+        },
+        {
+            "Sid": "Allow access for Key Administrators",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::528086553846:user/Aditya-prod"
+            },
+            "Action": [
+                "kms:Create*",
+                "kms:Describe*",
+                "kms:Enable*",
+                "kms:List*",
+                "kms:Put*",
+                "kms:Update*",
+                "kms:Revoke*",
+                "kms:Disable*",
+                "kms:Get*",
+                "kms:Delete*",
+                "kms:TagResource",
+                "kms:UntagResource",
+                "kms:ScheduleKeyDeletion",
+                "kms:CancelKeyDeletion"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "Allow use of the key",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::528086553846:user/Aditya-prod"
+            },
+            "Action": [
+                "kms:Encrypt",
+                "kms:Decrypt",
+                "kms:ReEncrypt*",
+                "kms:GenerateDataKey*",
+                "kms:DescribeKey"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "Allow attachment of persistent resources",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::528086553846:user/Aditya-prod"
+            },
+            "Action": [
+                "kms:CreateGrant",
+                "kms:ListGrants",
+                "kms:RevokeGrant"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "Bool": {
+                    "kms:GrantIsForAWSResource": "true"
+                }
+            }
+        },
+        {
+            "Sid": "Add service role"
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::528086553846:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+            },
+            "Action": [
+                "kms:*"
+            ],
+            "Resource": "*"
+        }
+     ]
+  })
+}
+
+
 
 // AutoScaling Group
 resource "aws_autoscaling_group" "web_server_group" {
   name                      = "WebServerGroup"
+  
   max_size                  = 5
   min_size                  = 3
   default_cooldown          = 60
   desired_capacity          = 3
-  launch_configuration      = "${aws_launch_configuration.asg-config.name}"
+  # launch_configuration      = "${aws_launch_configuration.asg-config.name}"
+    launch_template {
+    id      = aws_launch_template.asg_launch_template.id
+    version = "$Latest"
+  }
   vpc_zone_identifier       = ["${aws_subnet.subnet_1.id}", "${aws_subnet.subnet_2.id}", "${aws_subnet.subnet_3.id}"]
   health_check_grace_period = 1200
   target_group_arns = ["${aws_lb_target_group.lb_tg_webapp.arn}"]
@@ -299,10 +449,35 @@ resource "aws_lb_target_group" "lb_tg_webapp" {
   vpc_id   = "${aws_vpc.My_VPC.id}"
 }
 
+
+# resource "aws_lb_listener" "alb_listener1" {
+#   load_balancer_arn = "${aws_lb.app_lb.arn}"
+#   port              = "80"
+#   protocol          = "HTTP"
+  
+#   default_action {
+#     type             = "forward"
+#     target_group_arn = "${aws_lb_target_group.lb_tg_webapp.arn}"
+#   }
+# }
+
+
+resource "aws_kms_key" "rds_key" {
+  description             = "KMS key 1"
+  deletion_window_in_days = 7
+  tags = {
+    "Name" = "rds_key"
+  }
+}
+
+
+
 resource "aws_lb_listener" "alb_listener1" {
   load_balancer_arn = "${aws_lb.app_lb.arn}"
-  port              = "80"
-  protocol          = "HTTP"
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn =  var.certificate_arn
   
   default_action {
     type             = "forward"
@@ -379,14 +554,13 @@ resource "aws_security_group" "database" {
 
 
 # RDS instance
-
 resource "aws_db_instance" "RDS-Instance" { 
   allocated_storage    = 20
   storage_type         = "gp2"
   engine               = "mysql"
   engine_version       = "8.0.21"
   identifier           = var.db_identifier
-  instance_class       = "db.t2.micro"
+  instance_class       = "db.t3.micro"
   name                 = "csye6225"
   username             = "csye6225"
   password             = var.password_db
@@ -396,6 +570,8 @@ resource "aws_db_instance" "RDS-Instance" {
   skip_final_snapshot = true
   vpc_security_group_ids = [aws_security_group.database.id]
   db_subnet_group_name = aws_db_subnet_group.db_subnet_group.id
+  storage_encrypted = true
+  kms_key_id = aws_kms_key.rds_key.arn
   
 
   tags={
@@ -691,10 +867,10 @@ EOF
 
 
 #attaching CodeDeploy_EC2_S3 policy to ghactions  user
-resource "aws_iam_user_policy_attachment" "attach_GH_Upload_To_S3" {
-  user       = var.ghactions_username
-  policy_arn = aws_iam_policy.GH_Upload_To_S3.arn
-}
+# resource "aws_iam_user_policy_attachment" "attach_GH_Upload_To_S3" {
+#   user       = var.ghactions_username
+#   policy_arn = aws_iam_policy.GH_Upload_To_S3.arn
+# }
 
 #attaching GH_Code_Deploy policy to ghactions  user
 resource "aws_iam_user_policy_attachment" "attach_GH_Code_Deploy" {
