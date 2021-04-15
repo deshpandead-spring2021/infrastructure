@@ -29,3 +29,11 @@ Command to allow zsh to run shell scripts
 chmod +x buildAMI.sh
 
 
+The command to import certificate is as following:-
+
+$ aws acm import-certificate --certificate fileb://certificate_body.pem --certificate-chain fileb://certificate_chain.pem --private-key fileb://private_key.pem
+
+where,
+--certificate is for certificate body,
+-- certificate-chain is for certificate chain that is the ca-bundle file that Comodo gives
+--private-key is the key the user created to generate the certificate.
