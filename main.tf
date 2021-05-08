@@ -266,7 +266,7 @@ resource "aws_kms_key" "ebs_key" {
             "Sid": "Enable IAM User Permissions",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::528086553846:root"
+                "AWS": var.arn
             },
             "Action": "kms:*",
             "Resource": "*"
@@ -275,7 +275,7 @@ resource "aws_kms_key" "ebs_key" {
             "Sid": "Allow access for Key Administrators",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::528086553846:user/Aditya-prod"
+                "AWS": var.arn_users
             },
             "Action": [
                 "kms:Create*",
@@ -299,7 +299,7 @@ resource "aws_kms_key" "ebs_key" {
             "Sid": "Allow use of the key",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::528086553846:user/Aditya-prod"
+                "AWS": var.arn_users
             },
             "Action": [
                 "kms:Encrypt",
@@ -314,7 +314,7 @@ resource "aws_kms_key" "ebs_key" {
             "Sid": "Allow attachment of persistent resources",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::528086553846:user/Aditya-prod"
+                "AWS": var.arn_users
             },
             "Action": [
                 "kms:CreateGrant",
@@ -332,7 +332,7 @@ resource "aws_kms_key" "ebs_key" {
             "Sid": "Add service role"
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::528086553846:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+                "AWS": var.arn_users_codedeploy_policy
             },
             "Action": [
                 "kms:*"
@@ -397,7 +397,7 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm_high" {
   period                    = "300"
   statistic                 = "Average"
   threshold                 = "50"
-  dimensions = "${map("AutoScalingGroupName", "${aws_autoscaling_group.web_server_group.name}")}"
+  dimensions = tomap({AutoScalingGroupName = "aws_autoscaling_group.web_server_group.name"})
   alarm_description         = "Scale-up if CPU > 50% for 5 minutes"
   alarm_actions     = ["${aws_autoscaling_policy.web_server_scaleup_policy.arn}"]
 }
@@ -414,7 +414,7 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm_low" {
   statistic                 = "Average"
   threshold                 = "3"
   alarm_description         = "Scale-down if CPU < 3% for 5 minutes"
-  dimensions = "${map("AutoScalingGroupName", "${aws_autoscaling_group.web_server_group.name}")}"
+  dimensions = tomap({AutoScalingGroupName = "aws_autoscaling_group.web_server_group.name"})
   alarm_actions     = ["${aws_autoscaling_policy.web_server_scaledown_policy.arn}"]
 }
 
