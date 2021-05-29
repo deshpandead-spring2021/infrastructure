@@ -27,26 +27,19 @@ The basic workflow steps of Terraform deployment is as follows:
 
 
 3. Commands to set up MYSQL server inside the EC2 instance
-
-sudo mysql
-
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'insert_password';
-
-Create schema webapp;
+    *sudo mysql*
+    *ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'insert_password'*;
+    *Create schema webapp*;
 
 4. Terraform command to change workspace
+   *terraform workspace new "alpha"*
 
-terraform workspace new "alpha"
-
-5. Command to allow zsh to run shell scripts (This command is useful if *bash* is your default terminal)
-
-chmod +x buildAMI.sh
+5. Command to allow zsh to run shell scripts (This command is useful if *bash* is your default terminal
+   *chmod +x buildAMI.sh*
 
 6. The command to import certificate is as following:-
-
-$ aws acm import-certificate --certificate fileb://certificate_body.pem --certificate-chain fileb://certificate_chain.pem --private-key fileb://private_key.pem
-
-where,
---certificate is for certificate body,
--- certificate-chain is for certificate chain that is the ca-bundle file that Comodo gives
---private-key is the key the user created to generate the certificate.
+   *aws acm import-certificate --certificate fileb://certificate_body.pem --certificate-chain fileb:// certificate_chain.pem --private-key fileb://private_key.pem* 
+    where,
+    --certificate is for certificate body,
+    -- certificate-chain is for certificate chain that is the ca-bundle file that Comodo gives
+    --private-key is the key the user created to generate the certificate.
