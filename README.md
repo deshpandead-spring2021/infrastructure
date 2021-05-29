@@ -17,7 +17,7 @@ The basic workflow steps of Terraform deployment is as follows:
 4. **Plan & Apply** - Run `*terraform plan*` to verify creation process and then terraform apply to create real resources as well as state file that compares future changes in your configuration files to what actually exists in your deployment environment. Upon `*terraform apply*`, the user will be prompted to review the proposed changes and must affirm the changes or else Terraform will not apply the proposed plan.
 5. **Destroy** - The *`terraform destroy`* command terminates resources defined in your Terraform configuration. This command is the reverse of *`terraform apply`* in that it terminates all the resources specified by the configuration. It does not destroy resources running elsewhere that are not described in the current configuration.Just like with apply, Terraform determines the order in which things must be destroyed.
 
-# Following are some of the important commands that are helpful for setting up insfrastrcuter as per you convenience
+# Important commands that are helpful for setting up Infrastructure
 
 1. To ssh into the EC2 instance
 *ssh -i .ssh/key-pair ubuntu@ipaddress*
